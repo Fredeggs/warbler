@@ -5,7 +5,7 @@ from flask_debugtoolbar import DebugToolbarExtension
 from sqlalchemy.exc import IntegrityError
 
 from forms import UserAddForm, LoginForm, MessageForm, EditProfileForm
-from models import db, connect_db, User, Message, Follows
+from models import Likes, db, connect_db, User, Message, Follows
 
 CURR_USER_KEY = "curr_user"
 
@@ -21,6 +21,7 @@ app.config["SQLALCHEMY_TRACK_MODIFICATIONS"] = False
 app.config["SQLALCHEMY_ECHO"] = False
 app.config["DEBUG_TB_INTERCEPT_REDIRECTS"] = True
 app.config["SECRET_KEY"] = os.environ.get("SECRET_KEY", "it's a secret")
+app.config["DEBUG_TB_INTERCEPT_REDIRECTS"] = False
 toolbar = DebugToolbarExtension(app)
 
 connect_db(app)
@@ -210,6 +211,21 @@ def stop_following(follow_id):
     return redirect(f"/users/{g.user.id}/following")
 
 
+@app.route("/users/<int:user_id>/likes")
+def users_likes(user_id):
+    """Show list of messages liked by user."""
+
+    if not g.user:
+        flash("Access unauthorized.", "danger")
+        return redirect("/")
+
+    user = User.query.get_or_404(user_id)
+    likes = [message.id for message in user.likes]
+
+    messages = Message.query.filter(Message.id.in_(likes)).all()
+    return render_template("users/likes.html", user=user, messages=messages)
+
+
 @app.route("/users/profile", methods=["GET", "POST"])
 def profile():
     """Update profile for current user."""
@@ -289,6 +305,36 @@ def messages_show(message_id):
     return render_template("messages/show.html", message=msg)
 
 
+@app.route("/messages/add_like/<int:message_id>", methods=["POST"])
+def messages_like(message_id):
+    """Like a message."""
+
+    if not g.user:
+        flash("Access unauthorized.", "danger")
+        return redirect("/")
+
+    new_like = Likes(user_id=g.user.id, message_id=message_id)
+    db.session.add(new_like)
+    db.session.commit()
+    return redirect("/")
+
+
+@app.route("/messages/remove_like/<int:message_id>", methods=["POST"])
+def messages_remove_like(message_id):
+    """Unlike a message."""
+
+    if not g.user:
+        flash("Access unauthorized.", "danger")
+        return redirect("/")
+
+    like = Likes.query.filter(
+        (Likes.user_id == g.user.id) & (Likes.message_id == message_id)
+    ).first()
+    db.session.delete(like)
+    db.session.commit()
+    return redirect("/")
+
+
 @app.route("/messages/<int:message_id>/delete", methods=["POST"])
 def messages_destroy(message_id):
     """Delete a message."""
@@ -317,18 +363,21 @@ def homepage():
     """
 
     if g.user:
-        
-        following_ids = [user.id for user in g.user.following]
 
+        following_ids = [user.id for user in g.user.following]
         messages = (
-            Message.query
-            .filter(Message.user_id.in_(following_ids))
+            Message.query.filter(
+                (Message.user_id.in_(following_ids)) | (Message.user_id == g.user.id)
+            )
             .order_by(Message.timestamp.desc())
             .limit(100)
             .all()
         )
 
-        return render_template("home.html", messages=messages)
+        likes = Likes.query.filter(Likes.user_id == g.user.id).all()
+        like_ids = [like.message_id for like in likes]
+
+        return render_template("home.html", messages=messages, likes=like_ids)
 
     else:
         return render_template("home-anon.html")
